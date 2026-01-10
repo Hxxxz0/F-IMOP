@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<robot name="simple_2dof_arm">
+  <!-- Link 0: Base (Fixed) -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <cylinder length="0.1" radius="0.1"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <!-- Joint 1: Base to Link 1 -->
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="100" velocity="10"/>
+  </joint>
+
+  <!-- Link 1 -->
+  <link name="link1">
+    <inertial>
+      <origin xyz="0.5 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.33" iyz="0.0" izz="0.33"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.5 0 0" rpy="0 1.57 0"/>
+      <geometry>
+        <cylinder length="1.0" radius="0.05"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <!-- Joint 2: Link 1 to Link 2 -->
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="1.0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="100" velocity="10"/>
+  </joint>
+
+  <!-- Link 2 -->
+  <link name="link2">
+    <inertial>
+      <origin xyz="0.5 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.33" iyz="0.0" izz="0.33"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.5 0 0" rpy="0 1.57 0"/>
+      <geometry>
+        <cylinder length="1.0" radius="0.05"/>
+      </geometry>
+    </visual>
+  </link>
+</robot>
