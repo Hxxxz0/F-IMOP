@@ -6,6 +6,7 @@ This script reproduces all experiments from the F-IMOP paper:
 1. Baseline Tracking: Normal trajectory following
 2. Disturbance Rejection: External impact response
 3. Model Mismatch: Robustness to parameter errors
+4. Noise Robustness: Observation noise handling (NEW)
 
 Results are saved to the results/ directory.
 
@@ -56,7 +57,9 @@ def run_experiment(
     controller_type: str,
     scenario: str,
     duration: float = 5.0,
-    mismatch_ratio: float = 1.0
+    mismatch_ratio: float = 1.0,
+    obs_noise_std: float = 0.0,
+    filter_alpha: float = None
 ) -> Dict:
     """
     运行单个实验配置。
@@ -64,9 +67,11 @@ def run_experiment(
     Args:
         arm_type: "2DOF" 或 "6DOF"
         controller_type: "PID", "CTC", 或 "F-IMOP"
-        scenario: "Baseline", "Disturbance", 或 "Mismatch"
+        scenario: "Baseline", "Disturbance", "Mismatch", "Noise", 或 "HighNoise"
         duration: 仿真时长
         mismatch_ratio: 模型失配比例（控制器认为的质量/真实质量）
+        obs_noise_std: 观测噪声标准差 (rad)
+        filter_alpha: F-IMOP 滤波系数 (None = 无滤波)
     
     Returns:
         包含 time, err, tau, mod, V 的结果字典
@@ -97,8 +102,8 @@ def run_experiment(
     else:
         ctrl_model = SixLinkArm(m_scale=mismatch_ratio)
     
-    # 创建 F-IMOP 控制器
-    fimop = FIMOPController(ctrl_model, Lambda=Lambda, decay_rate=5.0)
+    # 创建 F-IMOP 控制器（带可选滤波）
+    fimop = FIMOPController(ctrl_model, Lambda=Lambda, decay_rate=5.0, filter_alpha=filter_alpha)
     
     # 状态初始化
     q = np.zeros(dof)
@@ -107,7 +112,7 @@ def run_experiment(
     
     # 轨迹生成
     def get_ref(t):
-        if scenario in ["Baseline", "Mismatch"]:
+        if scenario in ["Baseline", "Mismatch", "Noise", "HighNoise"]:
             return generate_figure8_trajectory(dof)(t)
         else:  # Disturbance - 保持静止
             return np.zeros(dof), np.zeros(dof), np.zeros(dof)
@@ -118,6 +123,10 @@ def run_experiment(
     for i, t in enumerate(time_span):
         q_d, dq_d, ddq_d = get_ref(t)
         
+        # 观测噪声注入
+        q_obs = q + np.random.normal(0, obs_noise_std, dof) if obs_noise_std > 0 else q
+        dq_obs = dq + np.random.normal(0, obs_noise_std, dof) if obs_noise_std > 0 else dq
+        
         # 外部扰动（仅 Disturbance 场景）
         ext_tau = np.zeros(dof)
         if scenario == "Disturbance" and 1.0 <= t <= 1.2:
@@ -127,31 +136,31 @@ def run_experiment(
         
         # 计算控制力矩
         if controller_type == "PID":
-            tau_out = get_pid_torque(q, dq, q_d, dq_d, int_e, Kp, Kd, Ki)
+            tau_out = get_pid_torque(q_obs, dq_obs, q_d, dq_d, int_e, Kp, Kd, Ki)
             tau_nom = tau_out
             
         elif controller_type == "CTC":
-            tau_out = get_ctc_torque(q, dq, q_d, dq_d, ddq_d, ctrl_model, Kp * 2, Kd * 2)
+            tau_out = get_ctc_torque(q_obs, dq_obs, q_d, dq_d, ddq_d, ctrl_model, Kp * 2, Kd * 2)
             tau_nom = tau_out
             
         elif controller_type == "F-IMOP":
             # 名义控制器: PD + 重力补偿
-            tau_pd = get_pid_torque(q, dq, q_d, dq_d, int_e, Kp, Kd, np.zeros((dof, dof)))
-            _, _, G_est = ctrl_model.get_dynamics(q, dq)
+            tau_pd = get_pid_torque(q_obs, dq_obs, q_d, dq_d, int_e, Kp, Kd, np.zeros((dof, dof)))
+            _, _, G_est = ctrl_model.get_dynamics(q_obs, dq_obs)
             tau_nom = tau_pd + G_est
             
-            # F-IMOP 过滤
-            tau_out, info = fimop.compute_safe_control(q, dq, q_d, dq_d, ddq_d, tau_nom)
+            # F-IMOP 过滤（控制器内部会应用滤波）
+            tau_out, info = fimop.compute_safe_control(q_obs, dq_obs, q_d, dq_d, ddq_d, tau_nom)
         
-        # 正向动力学仿真
+        # 正向动力学仿真（使用真实状态）
         ddq = real_robot.forward_dynamics(q, dq, tau_out + ext_tau)
         dq = dq + ddq * dt
         q = q + dq * dt
         
         # 更新积分误差
-        int_e = np.clip(int_e + (q_d - q) * dt, -5.0, 5.0)
+        int_e = np.clip(int_e + (q_d - q_obs) * dt, -5.0, 5.0)
         
-        # 记录
+        # 记录（使用真实误差）
         log["time"].append(t)
         log["err"].append(np.linalg.norm(q_d - q))
         log["tau"].append(np.linalg.norm(tau_out))
@@ -177,24 +186,43 @@ def run_all_experiments():
     results_dir = os.path.join(os.path.dirname(__file__), '..', 'results')
     os.makedirs(results_dir, exist_ok=True)
     
-    scenarios = ["Baseline", "Disturbance", "Mismatch"]
-    arms = ["2DOF", "6DOF"]
+    scenarios = ["Baseline", "Disturbance", "Mismatch", "Noise", "HighNoise"]
+    arms = ["2DOF"]  # 专注于 2DOF 以便清晰展示噪声影响
     
     print("=" * 60)
-    print("F-IMOP Paper Experiments")
+    print("F-IMOP Paper Experiments (with Noise Robustness)")
     print("=" * 60)
     
     for arm in arms:
         for scen in scenarios:
             print(f"\n运行实验: {arm} - {scen}...")
             
-            # 设置失配比例
+            # 设置失配比例和噪声
             ratio = 0.7 if scen == "Mismatch" else 1.0
+            noise_std = 0.0
+            if scen == "Noise":
+                noise_std = 0.05  # ~3 degrees
+            elif scen == "HighNoise":
+                noise_std = 0.20  # ~11.5 degrees
             
-            # 运行三个控制器
-            res_pid = run_experiment(arm, "PID", scen, mismatch_ratio=ratio)
-            res_fimop = run_experiment(arm, "F-IMOP", scen, mismatch_ratio=ratio)
-            res_ctc = run_experiment(arm, "CTC", scen, mismatch_ratio=ratio)
+            # 运行控制器
+            res_pid = run_experiment(arm, "PID", scen, mismatch_ratio=ratio, obs_noise_std=noise_std)
+            res_fimop = run_experiment(arm, "F-IMOP", scen, mismatch_ratio=ratio, obs_noise_std=noise_std)
+            res_ctc = run_experiment(arm, "CTC", scen, mismatch_ratio=ratio, obs_noise_std=noise_std)
+            
+            # 高噪声场景下额外测试带滤波的 F-IMOP
+            res_fimop_filt = None
+            if scen == "HighNoise":
+                res_fimop_filt = run_experiment(arm, "F-IMOP", scen, mismatch_ratio=ratio, 
+                                                obs_noise_std=noise_std, filter_alpha=0.05)
+            
+            # 打印 RMSE 统计
+            print(f"[{arm} - {scen}] (Noise={noise_std}) RMSE:")
+            print(f"  PID:         {np.mean(res_pid['err']):.5f}")
+            print(f"  CTC:         {np.mean(res_ctc['err']):.5f}")
+            print(f"  F-IMOP:      {np.mean(res_fimop['err']):.5f}")
+            if res_fimop_filt:
+                print(f"  F-IMOP+Filt: {np.mean(res_fimop_filt['err']):.5f}")
             
             t = res_pid["time"]
             
@@ -203,10 +231,12 @@ def run_all_experiments():
             
             # 子图 1: 跟踪误差
             plt.subplot(2, 1, 1)
-            plt.title(f"{arm} Arm - {scen} Scenario", fontsize=14)
-            plt.plot(t, res_pid["err"], 'r-', alpha=0.5, label="PID (Baseline)")
-            plt.plot(t, res_ctc["err"], 'g--', alpha=0.6, label="CTC (Ideal)")
-            plt.plot(t, res_fimop["err"], 'b-', linewidth=2.0, label="F-IMOP (Proposed)")
+            plt.title(f"{arm} Arm - {scen} Scenario (Noise={noise_std})", fontsize=14)
+            plt.plot(t, res_pid["err"], 'r-', alpha=0.5, label="PID")
+            plt.plot(t, res_ctc["err"], 'g--', alpha=0.6, label="CTC")
+            plt.plot(t, res_fimop["err"], 'b-', linewidth=2.0, label="F-IMOP")
+            if res_fimop_filt:
+                plt.plot(t, res_fimop_filt["err"], 'c-', linewidth=2.0, label="F-IMOP+Filter")
             plt.ylabel("Tracking Error Norm (rad)")
             plt.grid(True, alpha=0.3)
             plt.legend()
@@ -219,7 +249,9 @@ def run_all_experiments():
                 plt.ylabel("F-IMOP Intervention (Nm)")
             else:
                 plt.plot(t, res_pid["tau"], 'r-', alpha=0.3, label="PID Torque")
-                plt.plot(t, res_fimop["tau"], 'b-', linewidth=1.5, label="F-IMOP Torque")
+                plt.plot(t, res_fimop["tau"], 'b-', linewidth=1.5, label="F-IMOP")
+                if res_fimop_filt:
+                    plt.plot(t, res_fimop_filt["tau"], 'c-', linewidth=1.5, label="F-IMOP+Filter")
                 plt.ylabel("Total Control Effort (Nm)")
             
             plt.xlabel("Time (s)")

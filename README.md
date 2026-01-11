@@ -35,6 +35,7 @@ By projecting control inputs onto a safe set defined by the **inertia metric**, 
 - **🧩 Universal Interface**: Compatible with any nominal controller and robot dynamics.
 - 🤖 **URDF Support**: Load any robot model directly using `URDFModel` (via Pinocchio).
 - **🔧 Robustness**: Demonstrated stability with up to 30% parameter mismatch.
+- **🔇 Noise Filtering**: Built-in low-pass filter for noisy sensor environments.
 
 ---
 
@@ -90,6 +91,9 @@ tau_safe, info = controller.compute_safe_control(
     q, dq, q_target, dq_target, ddq_target, tau_nominal
 )
 print(f"Constraint active: {info['active']}, Correction: {info['correction']:.2f} Nm")
+
+# 4. For noisy environments, enable the built-in low-pass filter
+controller_filtered = FIMOPController(robot, Lambda=5.0, decay_rate=2.0, filter_alpha=0.05)
 ```
 
 ```bash
@@ -121,7 +125,22 @@ Reproduce all experiments from the paper (Baseline, Disturbance, Mismatch):
 
 ```bash
 python examples/paper_experiments.py
-# Generates 6 comparison plots in results/
+# Generates comparison plots including noise robustness tests in results/
+```
+
+---
+
+## 🔇 Noise Robustness
+
+F-IMOP includes a built-in **low-pass filter** for handling noisy sensor measurements. Enable it via the `filter_alpha` parameter:
+
+| Scenario | Noise (σ) | F-IMOP | F-IMOP+Filter | PID |
+|----------|-----------|--------|---------------|-----|
+| HighNoise | 0.2 rad | 0.197 | **0.094** | 0.137 |
+
+```python
+# Enable low-pass filtering for high-noise environments
+controller = FIMOPController(robot, Lambda=5.0, filter_alpha=0.05)
 ```
 
 ---
@@ -164,6 +183,7 @@ python examples/paper_experiments.py
 - **🧩 通用接口**: 只要提供动力学方程，即可适配任何串联机械臂。
 - **🤖 URDF 支持**: 原生支持通过 Pinocchio 加载 URDF 模型文件。
 - **🔧 强鲁棒性**: 在 30% 模型参数误差及外部强扰动下仍能保持稳定。
+- **🔇 噪声滤波**: 内置低通滤波器，适用于传感器噪声较大的环境。
 
 ---
 
@@ -247,7 +267,22 @@ python examples/urdf_test.py  # 运行仿真并生成可视化
 
 ```bash
 python examples/paper_experiments.py
-# 在 results/ 目录生成 6 张对比图
+# 在 results/ 目录生成对比图（包括噪声鲁棒性测试）
+```
+
+---
+
+## 🔇 噪声鲁棒性
+
+F-IMOP 内置 **低通滤波器**，可有效处理传感器噪声。通过 `filter_alpha` 参数启用：
+
+| 场景 | 噪声 (σ) | F-IMOP | F-IMOP+滤波 | PID |
+|------|----------|--------|-------------|-----|
+| 高噪声 | 0.2 rad | 0.197 | **0.094** | 0.137 |
+
+```python
+# 为高噪声环境启用低通滤波
+controller = FIMOPController(robot, Lambda=5.0, filter_alpha=0.05)
 ```
 
 ---

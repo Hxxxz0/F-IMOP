@@ -9,6 +9,7 @@ import numpy as np
 from typing import Union, Tuple, Dict, Any, Optional
 
 from .dynamics.base import DynamicsModel
+from .utils.filter import LowPassFilter
 
 
 class FIMOPController:
@@ -40,7 +41,8 @@ class FIMOPController:
                  dynamics_model: DynamicsModel,
                  Lambda: Union[float, np.ndarray] = 5.0,
                  decay_rate: float = 2.0,
-                 slack_tolerance: float = 1e-8):
+                 slack_tolerance: float = 1e-8,
+                 filter_alpha: Optional[float] = None):
         """
         初始化安全控制器。
         
@@ -52,6 +54,10 @@ class FIMOPController:
                         较大的值意味着更激进的修正。
             slack_tolerance: 数值计算容差，用于判断约束是否被违反。
                             设置适当的值可以避免由于浮点误差导致的抖动。
+            filter_alpha: 观测值低通滤波系数。范围 (0, 1]，其中:
+                          - None 或 1.0 = 无滤波
+                          - 0.1 = 中等滤波
+                          - 0.05 = 强滤波（适合高噪声环境）
         """
         self.model = dynamics_model
         self.decay_rate = decay_rate
@@ -59,6 +65,14 @@ class FIMOPController:
         
         # 将标量 Lambda 转换为对角矩阵
         self.Lambda = self._ensure_matrix(Lambda, self.model.dof)
+        
+        # 观测值滤波器
+        self.filter_alpha = filter_alpha
+        self._q_filter: Optional[LowPassFilter] = None
+        self._dq_filter: Optional[LowPassFilter] = None
+        if filter_alpha is not None and filter_alpha < 1.0:
+            self._q_filter = LowPassFilter(alpha=filter_alpha, dim=self.model.dof)
+            self._dq_filter = LowPassFilter(alpha=filter_alpha, dim=self.model.dof)
         
         # 内部状态记录（用于调试）
         self._last_V = 0.0
@@ -117,6 +131,12 @@ class FIMOPController:
         dq_target = np.asarray(dq_target, dtype=np.float64)
         ddq_target = np.asarray(ddq_target, dtype=np.float64)
         tau_nominal = np.asarray(tau_nominal, dtype=np.float64)
+        
+        # 应用低通滤波（如果启用）
+        if self._q_filter is not None:
+            q = self._q_filter.update(q)
+        if self._dq_filter is not None:
+            dq = self._dq_filter.update(dq)
         
         # ============================================
         # Step 1: 计算跟踪误差和滤波误差
